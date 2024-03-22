@@ -118,9 +118,9 @@ class Series(object):
 
     def send_to_sheet(self):
         try:
-            #Credentials goes here
+            #
             sheet = sh.worksheet("WebData")
-            df = pd.DataFrame(self.data, columns=['title', 'genre', 'runtime', 'sentiment', 'summary'])
+            df = pd.DataFrame(self.data, columns=['title', 'genre', 'Votes', 'sentiment', 'summary'])
             data = df.values.tolist()
             sheet.update(range_name="A2", values=data)
             print("Dashboard is also updated")
@@ -129,11 +129,127 @@ class Series(object):
             print(f"Wasn't able to add to sheet might be some error: {e}")
         
 
+class Movie(object):
+    def __init__(self) -> None:
+
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36',
+        }
+        self.data = []
+
+    def url(self, genre = None, from_year = None, to_year = None) -> None:
+        if not (genre or from_year or to_year):
+            self.recommend(link="https://www.imdb.com/search/title/?title_type=feature&sort=moviemeter,asc")
+
+        elif genre and not (from_year or to_year):
+            link = "https://www.imdb.com/search/title/?title_type=feature&genres="
+            while genre:
+                g = genre.pop()
+                link+=g
+                if genre:
+                    link+=","
+            link+="&sort=moviemeter,asc"
+            self.recommend(link=link)
+        
+        elif from_year and not(genre or to_year):
+            self.recommend(f"https://www.imdb.com/search/title/?title_type=feature&release_date={from_year}-01-22,&sort=moviemeter,asc")
+        
+        elif to_year and not(genre or from_year):
+            self.recommend(f"https://www.imdb.com/search/title/?title_type=feature&release_date=,{to_year}-03-22&sort=moviemeter,asc")
+        
+        elif to_year and from_year and not(genre):
+            self.recommend(f"https://www.imdb.com/search/title/?title_type=feature&release_date={from_year}-01-22,{to_year}-03-22&sort=moviemeter,asc")
+        
+        elif to_year and genre and not(from_year):
+            link = "https://www.imdb.com/search/title/?title_type=feature&genres="
+            while genre:
+                g = genre.pop()
+                link+=g
+                if genre:
+                    link+=","
+            link += f"&release_date=,{to_year}-03-22&sort=moviemeter,asc"
+            self.recommend(link=link)
+
+        elif from_year and genre and not(to_year):
+            link = "https://www.imdb.com/search/title/?title_type=feature&genres="
+            while genre:
+                g = genre.pop()
+                link+=g
+                if genre:
+                    link+=","
+            link += f"&release_date={from_year}-03-22,&sort=moviemeter,asc"
+            self.recommend(link=link)
+        else:
+            link = "https://www.imdb.com/search/title/?title_type=feature&genres="
+            while genre:
+                g = genre.pop()
+                link+=g
+                if genre:
+                    link+=","
+            link += f"&release_date={from_year}-03-22,{to_year}-03-22&sort=moviemeter,asc"
+            self.recommend(link=link)
+
+    def sentiments(self:object, link: str) -> str:
+        sentiments = []
+        try:
+            soup = BeautifulSoup(requests.get(link).text, "html.parser")
+            for i in soup.find_all("div", class_ = "text show-more__control"):
+                sentiments.append(i.text)
+
+            all_reviews = ' '.join(sentiments)
+            blob = TextBlob(all_reviews)
+            sentiment = "Positive" if blob.sentiment.polarity > 0 else "Negative" if blob.sentiment.polarity < 0 else "Neutral"
+            parser = PlaintextParser.from_string(all_reviews, Tokenizer("english"))
+            summarizer = LsaSummarizer()
+            summary = summarizer(parser.document, sentences_count=2) 
+            return sentiment, " ".join(str(sentence) for sentence in summary)
+        except:
+            return "Neutral", "Sentiment can't be analysed due to few reviews"  
+                  
+    def recommend(self, link):
+        
+        try:
+            response = requests.get(link, headers = self.headers)
+            soup = BeautifulSoup(response.text, "html.parser")
+            n = 3
+            for movie in soup.find('div', class_ = "ipc-page-grid__item ipc-page-grid__item--span-2").find("ul").find_all("li"):
+                name = " ".join(movie.find("h3").text.split()[1:])
+                id = movie.find("a", class_ = "ipc-title-link-wrapper").attrs["href"].split("/")[2]
+                spanlist = movie.find("div").find("div").find("div").find("div").find_all("span")
+                year = spanlist[0].text
+                duration = spanlist[1].text
+                rating = spanlist[2].text
+                n-=1
+                link = f"https://www.imdb.com/title/{id}/reviews?ref_=tt_urv"
+                sentiment, summary = self.sentiments(link)
+                self.data.append([name, year, duration, rating, sentiment, summary])
+                if n==0:
+                    break
+        except Exception as e:
+            print(f"Something went wrong: {e}")
+        
+        df = pd.DataFrame(self.data, columns=['title', 'year', 'duration', "rating", 'sentiment', 'summary'])
+        df.set_index("title", inplace=True)
+        st.table(df)
+        self.send_to_sheet()
+
+    def send_to_sheet(self):
+        try:
+            #
+            sheet = sh.worksheet("Movies")
+            df = pd.DataFrame(self.data, columns=['title', 'year', 'duration', "rating", 'sentiment', 'summary'])
+            data = df.values.tolist()
+            sheet.update(range_name="A2", values=data)
+            print("Dashboard is also updated")
+
+        except Exception as e:
+            print(f"Wasn't able to add to sheet might be some error: {e}")
 
 def main():
     st.set_page_config(page_title="Web-Series Recommendation",layout="centered", page_icon="random")
     title = "What would you like to watch today?"
     st.title(title.upper())
+    selected_content = st.radio(label="Select", options=["Movie", "Web Series"])
     genre = st.multiselect("Select Genre", [
         "Comedy",
         "Drama",
@@ -163,9 +279,13 @@ def main():
     ])
     from_year = st.number_input("From Year", min_value=1990, max_value=2024)
     to_year = st.number_input("To Year", min_value=from_year, max_value=2024)
-    if st.button("Get Web-Series"):
-        webseries = Series()
-        webseries.url(genre, from_year, to_year)
+    if st.button("Get it"):
+        if selected_content == "Movie":
+            movies = Movie()
+            movies.url(genre, from_year, to_year)
+        elif selected_content == "Web Series":
+            webseries = Series()
+            webseries.url(genre, from_year, to_year)
 
 def job():
     main()
